@@ -33,6 +33,6 @@ export async function getBlockFees(height) {
             : feeValue;
         return sum + (isNaN(feeMicroStx) ? 0 : feeMicroStx);
     }, 0);
-    const totalStx = totalMicroStx / 1e6; // Convert microSTX to STX
+    const totalStx = totalMicroStx / 1e6;
     return isNaN(totalStx) ? 0 : totalStx;
 }

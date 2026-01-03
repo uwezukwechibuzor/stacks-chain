@@ -1,12 +1,31 @@
 import { BlockFee } from "./models/blockFee.js";
 import { getLatestBlockHeight, getBlock, getBlockFees } from "./hiro.js";
+async function getLastIndexedHeight() {
+    const lastBlock = await BlockFee.findOne()
+        .sort({ block_height: -1 })
+        .select("block_height")
+        .lean();
+    return lastBlock ? lastBlock.block_height : 0;
+}
 export async function runIndexer(startHeight) {
     const latest = await getLatestBlockHeight();
     console.log(`🔎 Latest block: ${latest}`);
-    let height = startHeight;
+    // Get the last indexed height from database
+    const lastIndexed = await getLastIndexedHeight();
+    const resumeHeight = Math.max(startHeight, lastIndexed + 1);
+    if (lastIndexed > 0) {
+        console.log(`📊 Last indexed block: ${lastIndexed}`);
+        console.log(`🔄 Resuming from block: ${resumeHeight}`);
+    }
+    else {
+        console.log(`🚀 Starting from block: ${resumeHeight}`);
+    }
+    let height = resumeHeight;
     while (height <= latest) {
+        // Double-check if block already exists (safety check)
         const exists = await BlockFee.findOne({ block_height: height });
         if (exists) {
+            console.log(`⏭️  Block ${height} already indexed, skipping...`);
             height++;
             continue;
         }
