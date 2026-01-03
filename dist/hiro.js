@@ -19,7 +19,20 @@ export async function getBlock(height) {
 }
 export async function getBlockFees(height) {
     const txs = await fetchJSON(`${endpoint}/extended/v1/tx/block_height/${height}`);
-    // fee = fee_rate * tx_size (microSTX)
-    const totalMicroStx = txs.results.reduce((sum, tx) => sum + tx.fee_rate * tx.tx_size, 0);
-    return totalMicroStx / 1e6; // STX
+    // Handle empty results or missing transactions
+    if (!txs.results || txs.results.length === 0) {
+        return 0;
+    }
+    // fee_rate is in microSTX (e.g., "180" = 0.00018 STX)
+    // Sum all fee_rate values and convert from microSTX to STX
+    const totalMicroStx = txs.results.reduce((sum, tx) => {
+        // Use fee field if available, otherwise use fee_rate
+        const feeValue = tx.fee ?? tx.fee_rate ?? 0;
+        const feeMicroStx = typeof feeValue === "string"
+            ? parseFloat(feeValue)
+            : feeValue;
+        return sum + (isNaN(feeMicroStx) ? 0 : feeMicroStx);
+    }, 0);
+    const totalStx = totalMicroStx / 1e6; // Convert microSTX to STX
+    return isNaN(totalStx) ? 0 : totalStx;
 }

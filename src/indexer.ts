@@ -21,16 +21,19 @@ export async function runIndexer(startHeight: number) {
     const block = await getBlock(height);
     const fees = await getBlockFees(height);
 
+    // Validate fees is a valid number
+    const validFees = isNaN(fees) || !isFinite(fees) ? 0 : fees;
+
     await BlockFee.create({
       block_height: height,
       block_timestamp: block.block_time,
-      total_fees_stx: fees
+      total_fees_stx: validFees
     });
 
     console.log(
       `📦 Block ${height} | ${new Date(
         block.block_time * 1000
-      ).toISOString()} | fees ${fees.toFixed(6)} STX`
+      ).toISOString()} | fees ${validFees.toFixed(6)} STX`
     );
 
     height++;

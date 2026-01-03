@@ -4,5 +4,6 @@ const BlockFeeSchema = new mongoose.Schema({
     block_timestamp: Number,
     total_fees_stx: Number
 }, { timestamps: true });
-export const BlockFee = mongoose.models.BlockFee ||
-    mongoose.model("BlockFee", BlockFeeSchema);
+const collectionName = process.env.Fees_COLLECTION || "stacks-fees";
+export const BlockFee = mongoose.models[collectionName] ||
+    mongoose.model("BlockFee", BlockFeeSchema, collectionName);
