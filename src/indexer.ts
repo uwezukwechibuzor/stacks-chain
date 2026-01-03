@@ -14,6 +14,34 @@ async function getLastIndexedHeight(): Promise<number> {
   return lastBlock ? lastBlock.block_height : 0;
 }
 
+async function processBlock(height: number) {
+  try {
+    const [block, fees] = await Promise.all([
+      getBlock(height),
+      getBlockFees(height)
+    ]);
+
+    const validFees = isNaN(fees) || !isFinite(fees) ? 0 : fees;
+
+    await BlockFee.create({
+      block_height: height,
+      block_timestamp: block.block_time,
+      total_fees_stx: validFees
+    });
+
+    console.log(
+      `📦 Block ${height} | ${new Date(
+        block.block_time * 1000
+      ).toISOString()} | fees ${validFees.toFixed(6)} STX`
+    );
+
+    return { success: true, height };
+  } catch (error) {
+    console.error(`❌ Error processing block ${height}:`, error);
+    return { success: false, height, error };
+  }
+}
+
 export async function runIndexer(startHeight: number) {
   const latest = await getLatestBlockHeight();
   console.log(`🔎 Latest block: ${latest}`);
@@ -29,36 +57,50 @@ export async function runIndexer(startHeight: number) {
     console.log(`🚀 Starting from block: ${resumeHeight}`);
   }
 
+  const batchSize = Number(process.env.BATCH_SIZE) || 10;
+  console.log(`⚡ Processing blocks in batches of ${batchSize}`);
+
   let height = resumeHeight;
 
   while (height <= latest) {
-    // Double-check if block already exists
-    const exists = await BlockFee.findOne({ block_height: height });
-    if (exists) {
-      console.log(`⏭️  Block ${height} already indexed, skipping...`);
-      height++;
+    // Get batch of heights to process
+    const batchHeights: number[] = [];
+    for (let i = 0; i < batchSize && height + i <= latest; i++) {
+      batchHeights.push(height + i);
+    }
+
+    // Check which blocks already exist in database
+    const existingBlocks = await BlockFee.find({
+      block_height: { $in: batchHeights }
+    }).select("block_height").lean();
+
+    const existingHeights = new Set(
+      (existingBlocks as unknown as { block_height: number }[]).map(b => b.block_height)
+    );
+    const blocksToProcess = batchHeights.filter(h => !existingHeights.has(h));
+
+    if (blocksToProcess.length === 0) {
+      console.log(`⏭️  Blocks ${batchHeights[0]}-${batchHeights[batchHeights.length - 1]} already indexed, skipping...`);
+      height += batchSize;
       continue;
     }
 
-    const block = await getBlock(height);
-    const fees = await getBlockFees(height);
-
-    // Validate fees is a valid number
-    const validFees = isNaN(fees) || !isFinite(fees) ? 0 : fees;
-
-    await BlockFee.create({
-      block_height: height,
-      block_timestamp: block.block_time,
-      total_fees_stx: validFees
-    });
-
-    console.log(
-      `📦 Block ${height} | ${new Date(
-        block.block_time * 1000
-      ).toISOString()} | fees ${validFees.toFixed(6)} STX`
+    // Process blocks in batch concurrently
+    const results = await Promise.all(
+      blocksToProcess.map(h => processBlock(h))
     );
 
-    height++;
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+
+    if (successful > 0) {
+      console.log(`✅ Processed ${successful} block(s) in batch`);
+    }
+    if (failed > 0) {
+      console.log(`⚠️  Failed to process ${failed} block(s) in batch`);
+    }
+
+    height += batchSize;
   }
 
   console.log("✅ Indexing complete");
