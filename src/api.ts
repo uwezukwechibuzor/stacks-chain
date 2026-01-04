@@ -1,0 +1,115 @@
+import express from "express";
+import { BlockFee } from "./models/blockFee.js";
+
+const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+
+app.use(express.json());
+
+interface QueryParams {
+  startTime?: string;
+  startHeight?: string;
+  endTime?: string;
+  endHeight?: string;
+}
+
+app.get("/fees", async (req, res) => {
+  try {
+    const { startTime, startHeight, endTime, endHeight } = req.query as QueryParams;
+
+    // Build query based on provided parameters
+    const query: any = {};
+    const conditions: any[] = [];
+
+    // Handle time-based queries (timestamp in seconds or milliseconds)
+    if (startTime || endTime) {
+      const timeQuery: any = {};
+      if (startTime) {
+        const timestamp = Number(startTime);
+        if (isNaN(timestamp)) {
+          return res.status(400).json({
+            error: "Invalid startTime format",
+            message: "startTime must be a valid Unix timestamp (seconds or milliseconds)"
+          });
+        }
+        // Convert to seconds if timestamp is in milliseconds (> year 2001 in ms)
+        timeQuery.$gte = timestamp > 1e12 ? Math.floor(timestamp / 1000) : timestamp;
+      }
+      if (endTime) {
+        const timestamp = Number(endTime);
+        if (isNaN(timestamp)) {
+          return res.status(400).json({
+            error: "Invalid endTime format",
+            message: "endTime must be a valid Unix timestamp (seconds or milliseconds)"
+          });
+        }
+        // Convert to seconds if timestamp is in milliseconds
+        timeQuery.$lte = timestamp > 1e12 ? Math.floor(timestamp / 1000) : timestamp;
+      }
+      if (Object.keys(timeQuery).length > 0) {
+        conditions.push({ block_timestamp: timeQuery });
+      }
+    }
+
+    // Handle height-based queries
+    if (startHeight || endHeight) {
+      const heightQuery: any = {};
+      if (startHeight) {
+        heightQuery.$gte = Number(startHeight);
+      }
+      if (endHeight) {
+        heightQuery.$lte = Number(endHeight);
+      }
+      if (Object.keys(heightQuery).length > 0) {
+        conditions.push({ block_height: heightQuery });
+      }
+    }
+
+    if (conditions.length === 1) {
+      Object.assign(query, conditions[0]);
+    } else if (conditions.length > 1) {
+      query.$and = conditions;
+    }
+
+    // Aggregate to sum the fees
+    const result = await BlockFee.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: null,
+          totalFees: { $sum: "$total_fees_stx" },
+          blockCount: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const totalFees = result.length > 0 ? result[0].totalFees : 0;
+    const blockCount = result.length > 0 ? result[0].blockCount : 0;
+
+    res.json({
+      token: "stx",
+      totalFees: totalFees,
+      blockCount: blockCount,
+      query: {
+        startTime: startTime || null,
+        startHeight: startHeight || null,
+        endTime: endTime || null,
+        endHeight: endHeight || null
+      }
+    });
+  } catch (error) {
+    console.error("Error querying fees:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
+export function startAPI() {
+  app.listen(PORT, () => {
+    console.log(`🌐 API server running on port ${PORT}`);
+    console.log(`📡 Query fees endpoint: http://localhost:${PORT}/fees`);
+  });
+}
+

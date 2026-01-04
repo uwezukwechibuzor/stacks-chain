@@ -1,10 +1,13 @@
 import "dotenv/config";
 import { connectDB } from "./db.js";
 import { runIndexer } from "./indexer.js";
+import { startAPI } from "./api.js";
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 async function main() {
+    // Start API server
+    startAPI();
     const startHeight = Number(process.env.START_HEIGHT || 1);
     const pollInterval = Number(process.env.POLL_INTERVAL) || 60000;
     while (true) {
