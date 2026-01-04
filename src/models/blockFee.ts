@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const BlockFeeSchema = new mongoose.Schema(
   {
     block_height: { type: Number, unique: true, index: true },
-    block_timestamp: Number,
+    block_timestamp: { type: Number, index: true },
     total_fees_stx: Number
   },
   { timestamps: true }

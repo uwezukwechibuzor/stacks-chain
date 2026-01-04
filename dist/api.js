@@ -3,6 +3,10 @@ import { BlockFee } from "./models/blockFee.js";
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json());
+async function ensureIndexes() {
+    await BlockFee.collection.createIndex({ block_timestamp: 1 });
+    await BlockFee.collection.createIndex({ block_height: 1 });
+}
 app.get("/fees", async (req, res) => {
     try {
         const { startTime, startHeight, endTime, endHeight } = req.query;
@@ -20,7 +24,7 @@ app.get("/fees", async (req, res) => {
                         message: "startTime must be a valid Unix timestamp (seconds or milliseconds)"
                     });
                 }
-                // Convert to seconds if timestamp is in milliseconds (> year 2001 in ms)
+                // Convert milliseconds to seconds
                 timeQuery.$gte = timestamp > 1e12 ? Math.floor(timestamp / 1000) : timestamp;
             }
             if (endTime) {
@@ -31,7 +35,6 @@ app.get("/fees", async (req, res) => {
                         message: "endTime must be a valid Unix timestamp (seconds or milliseconds)"
                     });
                 }
-                // Convert to seconds if timestamp is in milliseconds
                 timeQuery.$lte = timestamp > 1e12 ? Math.floor(timestamp / 1000) : timestamp;
             }
             if (Object.keys(timeQuery).length > 0) {
@@ -41,24 +44,22 @@ app.get("/fees", async (req, res) => {
         // Handle height-based queries
         if (startHeight || endHeight) {
             const heightQuery = {};
-            if (startHeight) {
+            if (startHeight)
                 heightQuery.$gte = Number(startHeight);
-            }
-            if (endHeight) {
+            if (endHeight)
                 heightQuery.$lte = Number(endHeight);
-            }
             if (Object.keys(heightQuery).length > 0) {
                 conditions.push({ block_height: heightQuery });
             }
         }
-        // Combine conditions
         if (conditions.length === 1) {
             Object.assign(query, conditions[0]);
         }
         else if (conditions.length > 1) {
             query.$and = conditions;
         }
-        // Aggregate to sum the fees
+        // Single aggregation query - MongoDB handles large datasets efficiently
+        // Indexes on block_timestamp and block_height ensure fast queries
         const result = await BlockFee.aggregate([
             { $match: query },
             {
@@ -73,8 +74,8 @@ app.get("/fees", async (req, res) => {
         const blockCount = result.length > 0 ? result[0].blockCount : 0;
         res.json({
             token: "stx",
-            totalFees: totalFees,
-            blockCount: blockCount,
+            totalFees,
+            blockCount,
             query: {
                 startTime: startTime || null,
                 startHeight: startHeight || null,
@@ -91,7 +92,8 @@ app.get("/fees", async (req, res) => {
         });
     }
 });
-export function startAPI() {
+export async function startAPI() {
+    await ensureIndexes();
     app.listen(PORT, () => {
         console.log(`🌐 API server running on port ${PORT}`);
         console.log(`📡 Query fees endpoint: http://localhost:${PORT}/fees`);
