@@ -7,13 +7,21 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function main() {
-  await connectDB();
-
   const startHeight = Number(process.env.START_HEIGHT || 1);
   const pollInterval = Number(process.env.POLL_INTERVAL) || 60000;
 
   while (true) {
     try {
+      // Try to connect if not already connected
+      try {
+        await connectDB();
+      } catch (dbError) {
+        console.error("❌ Database connection error:", dbError);
+        console.log(`⏳ Waiting ${pollInterval / 1000} seconds before retrying connection...`);
+        await sleep(pollInterval);
+        continue;
+      }
+
       const reachedLatest = await runIndexer(startHeight);
       
       if (reachedLatest) {
@@ -32,6 +40,9 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
-  process.exit(1);
+  console.error("❌ Fatal error in main:", err);
+  console.log("🔄 Restarting in 60 seconds...");
+  setTimeout(() => {
+    main();
+  }, 60000);
 });
