@@ -57,7 +57,7 @@ export async function runIndexer(startHeight: number) {
     console.log(`🚀 Starting from block: ${resumeHeight}`);
   }
 
-  const batchSize = Number(process.env.BATCH_SIZE) || 10;
+  const batchSize = Number(process.env.BATCH_SIZE) || 5;
   console.log(`⚡ Processing blocks in batches of ${batchSize}`);
 
   let height = resumeHeight;
