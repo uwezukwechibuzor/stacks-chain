@@ -72,5 +72,11 @@ export async function runIndexer(startHeight) {
         }
         height += batchSize;
     }
-    console.log("✅ Indexing complete");
+    // Check if we've indexed up to the latest block
+    const lastIndexedAfter = await getLastIndexedHeight();
+    const reachedLatest = lastIndexedAfter >= latest;
+    if (reachedLatest) {
+        console.log(`✅ Indexing complete. Indexed up to block ${lastIndexedAfter} (latest: ${latest})`);
+    }
+    return reachedLatest;
 }
