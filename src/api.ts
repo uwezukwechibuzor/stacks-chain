@@ -2,6 +2,7 @@ import express from "express";
 import { BlockFee } from "./models/blockFee.js";
 
 const app = express();
+const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
@@ -109,8 +110,8 @@ app.get("/fees", async (req, res) => {
 
 export async function startAPI() {
   await ensureIndexes();
-  app.listen(PORT, () => {
-    console.log(`🌐 API server running on port ${PORT}`);
-    console.log(`📡 Query fees endpoint: http://localhost:${PORT}/fees`);
+  app.listen(PORT, HOST, () => {
+    console.log(`🌐 API server running on ${HOST}:${PORT}`);
+    console.log(`📡 Query fees endpoint: http://${HOST}:${PORT}/fees`);
   });
 }

@@ -91,6 +91,7 @@ MONGO_AUTH_DB=********************
 Fees_COLLECTION=stacks-fees
 
 # API Configuration
+HOST=127.0.0.1
 PORT=3000
 
 # Indexer Configuration
