@@ -1,4 +1,5 @@
 import { BlockFee } from "./models/blockFee.js";
+import { FailedBlock } from "./models/failedBlock.js";
 import {
   getLatestBlockHeight,
   getBlock,
@@ -46,28 +47,75 @@ async function processBlock(height: number, retries = 3, delay = 1000): Promise<
         ).toISOString()} | fees ${validFees.toFixed(6)} STX`
       );
 
+      // Successfully processed - remove from failed blocks if it was there
+      await removeFailedBlock(height);
       return { success: true, height };
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isRateLimit = errorMessage.includes("429") || errorMessage.includes("Too Many Requests");
       const isTransientError = error instanceof Error && (
-        error.message.includes("SSL") ||
-        error.message.includes("ECONNRESET") ||
-        error.message.includes("ETIMEDOUT") ||
-        error.message.includes("ENOTFOUND")
+        errorMessage.includes("SSL") ||
+        errorMessage.includes("ECONNRESET") ||
+        errorMessage.includes("ETIMEDOUT") ||
+        errorMessage.includes("ENOTFOUND") ||
+        isRateLimit
       );
 
       if (attempt < retries && isTransientError) {
-        const backoffDelay = delay * Math.pow(2, attempt - 1); // Exponential backoff
-        console.log(`⚠️  Block ${height} failed (attempt ${attempt}/${retries}), retrying in ${backoffDelay}ms...`);
+        // Use longer backoff for rate limits (429 errors)
+        const baseDelay = isRateLimit ? delay * 5 : delay;
+        const backoffDelay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+        console.log(`⚠️  Block ${height} failed (attempt ${attempt}/${retries})${isRateLimit ? " - rate limited" : ""}, retrying in ${backoffDelay}ms...`);
         await sleep(backoffDelay);
         continue;
       }
 
-      console.error(`❌ Error processing block ${height} (attempt ${attempt}/${retries}):`, error instanceof Error ? error.message : error);
+      console.error(`❌ Error processing block ${height} (attempt ${attempt}/${retries}):`, errorMessage);
+      // Track failed block in database
+      await trackFailedBlock(height, error);
       return { success: false, height, error };
     }
   }
   
   return { success: false, height, error: "Max retries exceeded" };
+}
+
+async function trackFailedBlock(height: number, error: any): Promise<void> {
+  try {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await FailedBlock.findOneAndUpdate(
+      { block_height: height },
+      {
+        block_height: height,
+        error_message: errorMessage,
+        failed_at: new Date(),
+        $inc: { retry_count: 1 }
+      },
+      { upsert: true, new: true }
+    );
+  } catch (err) {
+    console.error(`Failed to track failed block ${height}:`, err);
+  }
+}
+
+async function removeFailedBlock(height: number): Promise<void> {
+  try {
+    await FailedBlock.deleteOne({ block_height: height });
+  } catch (err) {
+    console.error(`Failed to remove failed block ${height}:`, err);
+  }
+}
+
+async function getFailedBlocks(): Promise<number[]> {
+  try {
+    const failedBlocks = await FailedBlock.find({})
+      .select("block_height")
+      .lean() as unknown as { block_height: number }[];
+    return failedBlocks.map(b => b.block_height);
+  } catch (err) {
+    console.error("Failed to fetch failed blocks:", err);
+    return [];
+  }
 }
 
 export async function runIndexer(startHeight: number) {
@@ -84,6 +132,9 @@ export async function runIndexer(startHeight: number) {
   } else {
     console.log(`🚀 Starting from block: ${resumeHeight}`);
   }
+
+  // Track failed blocks in memory during this run
+  const currentRunFailedBlocks = new Set<number>();
 
   const batchSize = Number(process.env.BATCH_SIZE) || 5;
   console.log(`⚡ Processing blocks in batches of ${batchSize}`);
@@ -129,11 +180,13 @@ export async function runIndexer(startHeight: number) {
     if (failedBlocks.length > 0) {
       console.log(`🔄 Retrying ${failedBlocks.length} failed block(s) sequentially...`);
       for (const failedHeight of failedBlocks) {
+        currentRunFailedBlocks.add(failedHeight);
         const retryResult = await processBlock(failedHeight, 5, 2000); // More retries for failed blocks
         if (retryResult.success) {
+          currentRunFailedBlocks.delete(failedHeight);
           console.log(`✅ Successfully processed block ${failedHeight} on retry`);
         } else {
-          console.error(`❌ Block ${failedHeight} failed after all retries - will be retried in next run`);
+          console.error(`❌ Block ${failedHeight} failed after all retries - tracked for next run`);
         }
       }
     }
@@ -141,37 +194,33 @@ export async function runIndexer(startHeight: number) {
     height += batchSize;
   }
 
-  // Check for any gaps in indexed blocks and retry them
-  console.log("🔍 Checking for gaps in indexed blocks...");
-  const indexedBlocks = await BlockFee.find({
-    block_height: { $gte: resumeHeight, $lte: latest }
-  })
-    .select("block_height")
-    .sort({ block_height: 1 })
-    .lean();
+  // Retry previously failed blocks from database
+  // This is much more efficient than scanning all blocks - we only query failed blocks
+  console.log("🔍 Checking for previously failed blocks...");
+  const previouslyFailedBlocks = await getFailedBlocks();
+  
+  // Filter to only blocks we care about (within range and not already processed successfully this run)
+  const blocksToRetry = previouslyFailedBlocks.filter(h => {
+    // Only retry blocks within our range
+    if (h < startHeight || h > latest) return false;
+    // Skip blocks that failed again in this run (they're already tracked)
+    if (currentRunFailedBlocks.has(h)) return false;
+    // processBlock will check if block already exists, so we can retry all others
+    return true;
+  });
 
-  const indexedHeights = new Set(
-    (indexedBlocks as unknown as { block_height: number }[]).map(b => b.block_height)
-  );
-
-  const gaps: number[] = [];
-
-  for (let h = resumeHeight; h <= latest; h++) {
-    if (!indexedHeights.has(h)) {
-      gaps.push(h);
-    }
-  }
-
-  if (gaps.length > 0) {
-    console.log(`⚠️  Found ${gaps.length} missing block(s), retrying...`);
-    for (const gapHeight of gaps) {
-      const retryResult = await processBlock(gapHeight, 5, 2000);
+  if (blocksToRetry.length > 0) {
+    console.log(`🔄 Retrying ${blocksToRetry.length} previously failed block(s)...`);
+    for (const failedHeight of blocksToRetry) {
+      const retryResult = await processBlock(failedHeight, 5, 2000);
       if (retryResult.success) {
-        console.log(`✅ Filled gap: block ${gapHeight}`);
+        console.log(`✅ Successfully processed previously failed block ${failedHeight}`);
       } else {
-        console.error(`❌ Failed to fill gap: block ${gapHeight}`);
+        console.error(`❌ Block ${failedHeight} still failing - will retry in next run`);
       }
     }
+  } else {
+    console.log("✅ No previously failed blocks to retry");
   }
 
   // Check if we've indexed up to the latest block

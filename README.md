@@ -8,7 +8,7 @@ A high-performance blockchain indexer that continuously monitors the Stacks bloc
 - ⚡ **Batch Processing**: Processes multiple blocks concurrently for faster indexing
 - 🔁 **Auto-Resume**: Automatically resumes from the last indexed block on restart
 - 🛡️ **Error Resilience**: Retry logic with exponential backoff for transient errors
-- 🔍 **Gap Detection**: Automatically detects and fills missing blocks
+- 📝 **Failure Tracking**: Explicitly tracks failed blocks and retries them automatically
 - 📊 **REST API**: Query fee data by time range or block height range
 - 🚀 **High Performance**: Optimized for querying millions of blocks efficiently
 - 🔐 **Indexed Queries**: MongoDB indexes ensure fast queries regardless of data size
@@ -27,7 +27,7 @@ A high-performance blockchain indexer that continuously monitors the Stacks bloc
 │   Indexer       │
 │  - Batch fetch  │
 │  - Retry logic  │
-│  - Gap detection│
+│  - Failure track│
 └────────┬────────┘
          │
          │ Store data
@@ -54,7 +54,9 @@ A high-performance blockchain indexer that continuously monitors the Stacks bloc
 2. **API Server** (`src/api.ts`): REST API for querying fee data
 3. **Hiro Client** (`src/hiro.ts`): Fetches block data from Hiro API
 4. **Database** (`src/db.ts`): MongoDB connection management
-5. **Models** (`src/models/blockFee.ts`): Mongoose schema for block fees
+5. **Models**:
+   - `src/models/blockFee.ts`: Mongoose schema for block fees
+   - `src/models/failedBlock.ts`: Mongoose schema for tracking failed blocks
 
 ## Database Schema
 
@@ -77,6 +79,24 @@ A high-performance blockchain indexer that continuously monitors the Stacks bloc
 
 **Collection Name**: Configurable via `Fees_COLLECTION` env variable (default: `stacks-fees`)
 
+### FailedBlock Collection
+
+```typescript
+{
+  block_height: Number,        // Unique block height (indexed)
+  error_message: String,        // Error message from failed attempt
+  failed_at: Date,             // When the block failed
+  retry_count: Number,          // Number of retry attempts
+  createdAt: Date,             // Auto-generated timestamp
+  updatedAt: Date              // Auto-generated timestamp
+}
+```
+
+**Indexes:**
+- `block_height`: Unique index for fast lookups
+
+**Collection Name**: Configurable via `FAILED_BLOCKS_COLLECTION` env variable (default: `stacks-failed-blocks`)
+
 ## Environment Variables
 
 Create a `.env` file in the root directory:
@@ -89,6 +109,7 @@ MONGO_USERNAME=********************
 MONGO_PASSWORD=********************
 MONGO_AUTH_DB=********************
 Fees_COLLECTION=stacks-fees
+FAILED_BLOCKS_COLLECTION=stacks-failed-blocks
 
 # API Configuration
 HOST=127.0.0.1
@@ -113,6 +134,8 @@ HIRO_API_KEY=your_hiro_api_key_here
 | `MONGO_PASSWORD` | No | - | MongoDB password (if not in URI) |
 | `MONGO_AUTH_DB` | No | `MONGO_DB_NAME` | Authentication database |
 | `Fees_COLLECTION` | No | `stacks-fees` | Collection name for block fees |
+| `FAILED_BLOCKS_COLLECTION` | No | `stacks-failed-blocks` | Collection name for tracking failed blocks |
+| `HOST` | No | `127.0.0.1` | API server host |
 | `PORT` | No | `3000` | API server port |
 | `START_HEIGHT` | No | `1` | Starting block height for indexing |
 | `BATCH_SIZE` | No | `5` | Number of blocks processed concurrently |
@@ -247,15 +270,16 @@ curl "http://localhost:3000/fees?startHeight=5673000&endHeight=5674000"
 3. **Batch Processing**: Fetches blocks in batches (configurable via `BATCH_SIZE`)
 4. **Concurrent Fetching**: Fetches block data and fees concurrently for each block
 5. **Error Handling**: Retries failed blocks with exponential backoff
-6. **Gap Detection**: After processing, scans for missing blocks and fills gaps
-7. **Continuous Monitoring**: When caught up, polls every 1 minutes for new blocks
+6. **Failure Tracking**: Failed blocks are tracked in database and automatically retried in subsequent runs
+7. **Continuous Monitoring**: When caught up, polls every 2 minutes for new blocks
 
 ### Error Resilience
 
-- **Transient Errors**: SSL errors, connection timeouts are automatically retried
+- **Transient Errors**: SSL errors, connection timeouts, and rate limits (429) are automatically retried
 - **Exponential Backoff**: Retry delays increase exponentially (1s, 2s, 4s...)
+- **Rate Limit Handling**: Longer backoff delays for HTTP 429 errors (5s, 10s, 20s...)
+- **Failure Tracking**: Failed blocks are persisted to database and automatically retried in next run
 - **Sequential Retry**: Failed blocks are retried sequentially to ensure no gaps
-- **Gap Filling**: Missing blocks are detected and filled automatically
 
 ## Development
 
@@ -270,7 +294,8 @@ stacks-chain/
 │   ├── hiro.ts           # Hiro API client
 │   ├── db.ts             # MongoDB connection
 │   └── models/
-│       └── blockFee.ts    # Mongoose schema
+│       ├── blockFee.ts      # Mongoose schema for block fees
+│       └── failedBlock.ts   # Mongoose schema for failed blocks
 ├── dist/                 # Compiled JavaScript
 ├── .env                  # Environment variables
 ├── package.json
